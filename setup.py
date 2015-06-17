@@ -7,6 +7,7 @@ setup(
     author='Phil Rosenfield',
     author_email='philip.rosenfield@unipd.it',
     version='1.5',
+    url='https://github.com/philrosenfield/colibri2trilegal'
     py_modules=['colibri2trilegal'],
     scripts=['colibri2trilegal'],
     install_requires=['matplotlib', 'numpy']

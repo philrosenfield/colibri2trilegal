@@ -2,6 +2,11 @@ colibri2trilegal
 ===============================================
 Convert COLIBRI tracks for use in TRILEGAL, make diagnostic TP-AGB plots.
 
+Install
+---------------
+<pre><code> sudo pip install colibri2trilegal
+</pre></code>
+
 Two ways to run:
 
 * Create a template input file: colibri2trilegal -p inputfile
