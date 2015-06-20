@@ -56,7 +56,7 @@ def colibri2trilegal(input_file):
     infile = InputFile(input_file, default_dict=agb_input_defaults())
 
     # set up file names and directories, cd to COLIBRI tracks.
-    AGB_setup(infile)
+    agb_setup(infile)
 
     # list of isofiles, zs, and ys to send to tracce file.
     isofiles, Zs, Ys = [], [], []
@@ -66,14 +66,16 @@ def colibri2trilegal(input_file):
     for metal_dir in infile.metal_dirs:
         metallicity, Y = metallicity_from_dir(metal_dir)
         logger.info('Z = {}'.format(metallicity))
-        if infile.diagnostic_dir0 is not None:
-            diagnostic_dir = os.path.join(infile.diagnostic_dir0,
-                                          infile.agb_mix,
-                                          infile.set_name,
-                                          metal_dir)  + '/'
-            ensure_dir(diagnostic_dir)
-            # update infile class to place plots in this directory
-            infile.diagnostic_dir = diagnostic_dir
+        if infile.diag_plots is True:
+            if infile.diagnostic_dir0 is not None:
+                diagnostic_dir = os.path.join(infile.diagnostic_dir0, infile.agb_mix,
+                                              infile.set_name, metal_dir)  + '/'
+                ensure_dir(diagnostic_dir)
+                # update infile class to place plots in this directory
+                infile.diagnostic_dir = diagnostic_dir
+            else:
+                logger.error('Must specifiy diagnostic_dir0 in infile for diag plots')
+                sys.exit(2)
 
         agb_tracks = get_files(os.path.join(infile.agbtrack_dir, infile.agb_mix,
                                             infile.set_name, metal_dir),
@@ -118,7 +120,7 @@ def colibri2trilegal(input_file):
             lifetime_data = np.append(lifetime_data, lifetime_datum)
 
             # make diagnostic plots
-            if infile.diagnostic_dir0 is not None and infile.diag_plots is True:
+            if infile.diag_plots is True and infile.diagnostic_dir0 is not None:
                 assert metallicity_from_dir(infile.diagnostic_dir)[0] == \
                     track.metallicity, 'diag dir met wrong!'
                 diag_plots(track, infile)
@@ -172,7 +174,7 @@ def colibri2trilegal(input_file):
     os.chdir(infile.home)
     return infile.cmd_input_file
 
-def AGB_setup(infile):
+def agb_setup(infile):
     '''set up files and directories for TPAGB parsing.'''
     infile.home = os.getcwd()
 
@@ -187,7 +189,7 @@ def AGB_setup(infile):
         logger.info('not making diagnostic plots')
 
     # set name convention: [mix]_[set].dat
-    infile.name_conv = '%s.dat' % '_'.join((infile.agb_mix, infile.set_name))
+    infile.name_conv = '{}_{}.dat'.format(infile.agb_mix, infile.set_name)
 
     # set track search string
     infile.track_identifier = 'agb_*Z*.dat'
@@ -440,6 +442,29 @@ def get_numeric_data(filename):
         data = np.zeros(len(col_keys))
     return AGBTracks(data, col_keys, filename)
 
+def calc_c_o(row):
+    """
+    C or O excess
+    if (C/O>1):
+        excess = log10 [(YC/YH) - (YO/YH)] + 12
+    if C/O<1:
+        excess = log10 [(YO/YH) - (YC/YH)] + 12
+
+    where YC = X(C12)/12 + X(C13)/13
+          YO = X(O16)/16 + X(O17)/17 + X(O18)/18
+          YH = XH/1.00794
+    """
+    yh = row['H'] / 1.00794
+    yc = row['C12'] / 12. + row['C13'] / 13.
+    yo = row['O16'] / 16. + row['O17'] / 17. + row['O18'] / 18.
+    
+    if row['CO'] > 1:
+        excess = np.log10((yc / yh) - (yo / yh)) + 12.
+    else:
+        excess = np.log10((yo / yh) - (yc / yh)) + 12.
+
+    return excess
+
 
 def make_iso_file(track, isofile):
     '''
@@ -454,7 +479,7 @@ def make_iso_file(track, isofile):
     per_min,        period in days
     ip_min,         1=first overtone, 0=fundamental mode
     mlr_min,        - mass loss rate in Msun/yr
-    logtem_min,     keep equal to logTe
+    excess,         C or O excess see calc_c_o.__doc__
     x_min,          X
     y_min,          Y
     xcno_min        X_C+X_O+X_N
@@ -478,14 +503,18 @@ def make_iso_file(track, isofile):
     isofile.write(' %.4f %i # %s \n' % (track.mass, len(rows), track.firstname))
     # hack, is the line length killing trilegal?
     # isofile.write(' %.4f %i # test \n' % (track.mass, len(rows)))
-    for r in rows:
+
+    for i, r in enumerate(rows):
         row = track.data_array[r]
         CNO = np.sum([row[c] for c in cno])
         mdot = 10 ** (row['dMdt'])
+        excess = calc_c_o(row)
+        
         if row['Pmod'] == 0:
             period = row['P0']
         else:
             period = row['P1']
+        
         if r == rows[-1]:
             # adding nonsense slope for the final row.
             slope = 999
@@ -493,18 +522,16 @@ def make_iso_file(track, isofile):
             try:
                 slope = 1. / track.slopes[list(rows).index(r)]
             except:
-                logger.error('bad slope: {}'.format(track.firstname))
-                import graphics
-                hrd_slopes(track)
+                logger.error('bad slope: {}, row: {}'.format(track.firstname, i))
         try:
             isofile.write(fmt % (row['ageyr'], row['L_star'], row['T_star'],
                                  row['M_star'], row['M_c'], row['CO'], period,
-                                 row['Pmod'], mdot, row['T_star'], row['H'],
+                                 row['Pmod'], mdot, excess, row['H'],
                                  row['Y'], CNO, slope))
         except IndexError:
-            logger.error('{}'.format(list(rows).index(r)))
-            logger.error('{}'.format(len(rows), len(track.slopes)))
-            logger.error('{}'.format(1. / slope[list(rows).index(r)]))
+            logger.error('this row: {}'.format(list(rows).index(r)))
+            logger.error('row length: {} slope array length {}'.format(len(rows), len(track.slopes)))
+            logger.error('slope reciprical: {}'.format(1. / slope[list(rows).index(r)]))
     return
 
 
@@ -1001,11 +1028,11 @@ def diag_plots(track, infile):
     plt.savefig('%s%s' % (fig_name, ext))
     plt.close()
 
-    fig, (axs) = plt.subplots(nrows=3)
-    ycols = ['logl', 'logt', 'C/O']
-    annotate = [False, False, True]
-    save_plot = [False, False, True]
-    xlabels = [False, False, True]
+    fig, (axs) = plt.subplots(nrows=4)
+    ycols = ['logl', 'logt', 'C/O', 'excess']
+    annotate = [False, False, False, True]
+    save_plot = [False, False, False, True]
+    xlabels = [False, False, False, True]
     for i in range(len(ycols)):
         age_vs_plot(track, infile, ycol=ycols[i], ax=axs[i], annotate=annotate[i],
                     xlabels=xlabels[i], ylabels=True, save_plot=save_plot[i])
@@ -1013,6 +1040,7 @@ def diag_plots(track, infile):
 
 def age_vs_plot(track, infile, ycol='logl', ax=None, annotate=True, xlabels=True,
                 save_plot=True, ylabels=True):
+    #import pdb; pdb.set_trace()
     agb_mix = infile.agb_mix
     set_name = infile.set_name
 
@@ -1031,6 +1059,12 @@ def age_vs_plot(track, infile, ycol='logl', ax=None, annotate=True, xlabels=True
         majL = MaxNLocator(4)
         minL = MaxNLocator(2)
         ylab = '$C/O$'
+    elif ycol == 'excess':
+        ydata = np.array([calc_c_o(track.data_array[i])
+                          for i in range(len(track.data_array))])
+        majL = MaxNLocator(4)
+        minL = MaxNLocator(2)
+        ylab = '$Excess$'
     else:
         logger.error('logl, logt, C/O only choices for y.')
         return
@@ -1043,6 +1077,7 @@ def age_vs_plot(track, infile, ycol='logl', ax=None, annotate=True, xlabels=True
         fig, ax = plt.subplots()
     ax.plot(age, ydata, color='black')
     ax.plot(age[Qs], ydata[Qs], 'o', color='green')
+
     if len(addpt) > 0:
         ax.plot(age[addpt], ydata[addpt], 'o', color='purple')
     ax.yaxis.set_major_locator(majL)
@@ -1051,19 +1086,19 @@ def age_vs_plot(track, infile, ycol='logl', ax=None, annotate=True, xlabels=True
     majorFormatter.set_powerlimits((-3, 4))
     ax.xaxis.set_major_formatter(majorFormatter)
 
-    if annotate is True:
+    if annotate:
         ax.text(0.06, 0.87, '${\\rm %s}$' % agb_mix.replace('_', '\ '),
                 transform=ax.transAxes)
         ax.text(0.06, 0.77,'${\\rm %s}$' % set_name.replace('_', '\ '),
                 transform=ax.transAxes)
         ax.text(0.06, 0.67, '$M=%.2f$' % track.mass,
                 transform=ax.transAxes)
-    if ylabels is True:
+    if ylabels:
         ax.set_ylabel('$%s$' % ylab, fontsize=20)
-    if xlabels is True:
+    if xlabels:
         ax.set_xlabel('$\rm{Age (yr)}$', fontsize=20)
 
-    if save_plot is True:
+    if save_plot:
         plotpath = os.path.join(infile.diagnostic_dir, 'age_v/')
         ensure_dir(plotpath)
         fname = os.path.split(track.name)[1].replace('.dat', '')

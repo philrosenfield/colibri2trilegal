@@ -6,7 +6,7 @@ setup(
     name='colibri2trilegal',
     author='Phil Rosenfield',
     author_email='philip.rosenfield@unipd.it',
-    version='1.5',
+    version='1.6',
     url='https://github.com/philrosenfield/colibri2trilegal',
     py_modules=['colibri2trilegal'],
     scripts=['colibri2trilegal'],
