@@ -85,18 +85,17 @@ def colibri2trilegal(input_file):
         iso_name_conv = '_'.join(('Z%.4f' % metallicity, infile.name_conv))
         isofile = os.path.join(infile.home, infile.isotrack_dir, iso_name_conv)
 
+
         if infile.over_write is False and os.path.isfile(isofile):
             logger.warning('not over writing {}'.format(isofile))
             out = None
-        if infile.over_write is True:
+        else:
             out = open(isofile, 'w')
-            out.write('# age(yr) logL logTe m_act mcore c/o period ip')
-            out.write(' Mdot(Msun/yr) logTe X Y CNO dlogTe/dlogL \n')
 
         isofile_rel_name = os.path.join('isotrack', infile.isotrack_dir,
                                         iso_name_conv)
         logger.info('found {} tracks'.format(len(agb_tracks)))
-        for agb_track in agb_tracks:
+        for i, agb_track in enumerate(agb_tracks):
             # load track
             track = get_numeric_data(agb_track)
             
@@ -111,7 +110,10 @@ def colibri2trilegal(input_file):
 
             # make iso file for trilegal
             if out is not None:
-                make_iso_file(track, out)
+                if i == 0:
+                    make_iso_file(track, out, write_header=True)
+                else:
+                    make_iso_file(track, out)
 
             # save information for lifetime file.
             lifetime_datum = np.array([metallicity, track.mass, track.tauc,
@@ -173,6 +175,7 @@ def colibri2trilegal(input_file):
 
     os.chdir(infile.home)
     return infile.cmd_input_file
+
 
 def agb_setup(infile):
     '''set up files and directories for TPAGB parsing.'''
@@ -442,6 +445,7 @@ def get_numeric_data(filename):
         data = np.zeros(len(col_keys))
     return AGBTracks(data, col_keys, filename)
 
+
 def calc_c_o(row):
     """
     C or O excess
@@ -466,49 +470,52 @@ def calc_c_o(row):
     return excess
 
 
-def make_iso_file(track, isofile):
+def make_iso_file(track, isofile, write_header=False):
     '''
     this only writes the quiescent lines and the first line.
     format of this file is:
-    t_min,          age in yr
-    logl_min,       logL
-    logte_min,      logTe
-    mass_min,       actual mass along track
-    mcore_min,      core mass
-    co_min,         C/O ratio
-    per_min,        period in days
-    ip_min,         1=first overtone, 0=fundamental mode
-    mlr_min,        - mass loss rate in Msun/yr
-    excess,         C or O excess see calc_c_o.__doc__
-    x_min,          X
-    y_min,          Y
-    xcno_min        X_C+X_O+X_N
-    slope           dTe/dL
+    age : age in yr
+    logl : logL
+    logte : logTe
+    mass : actual mass along track
+    mcore : core mass
+    per : period in days
+    period mode : 1=first overtone, 0=fundamental mode
+    mlr : mass loss rate in Msun/yr
+    x_min : X
+    y_min : Y
+    X_C : X_C
+    X_N : X_N
+    X_O : X_O
+    slope : dTe/dL
     '''
-    fmt = '%.4e %.4f %.4f %.5f %.5f %.4f %.4e %i %.4e %.4f %.6e %.6e %.6e %.4f \n'
+    isofile.write('# age(yr) logL logTe m_act mcore period ip')
+    isofile.write(' Mdot(Msun/yr) X Y X_C X_N X_O dlogTe/dlogL \n')
 
-    # cull agb track to quiescent, write out.
-    rows = [q for q in track.Qs]  # cutting the final point for the file.
-    # I don't know why this is here.
-    #rows[0] += 1
+    fmt = '%.4e %.4f %.4f %.5f %.5f %.4e %i %.4e %.6e %.6e %.6e %.6e %.6e %.4f \n'
+
+    # cull agb track to quiescent
+    rows = [q for q in track.Qs]
 
     keys = track.key_dict.keys()
     vals = track.key_dict.values()
     col_keys = np.array(keys)[np.argsort(vals)]
 
-    cno = [key for key in col_keys if (key.startswith('C1') or
-                                       key.startswith('N1') or
-                                       key.startswith('O1'))]
+    #cno = [key for key in col_keys if (key.startswith('C1') or
+    #                                   key.startswith('N1') or
+    #                                   key.startswith('O1'))]
 
     isofile.write(' %.4f %i # %s \n' % (track.mass, len(rows), track.firstname))
-    # hack, is the line length killing trilegal?
-    # isofile.write(' %.4f %i # test \n' % (track.mass, len(rows)))
 
     for i, r in enumerate(rows):
         row = track.data_array[r]
-        CNO = np.sum([row[c] for c in cno])
         mdot = 10 ** (row['dMdt'])
-        excess = calc_c_o(row)
+        # CNO and excess are no longer used
+        #CNO = np.sum([row[c] for c in cno])
+        #excess = calc_c_o(row)
+        xc = np.sum([row[c] for c in col_keys if c.startswith('C1')])
+        xn = np.sum([row[c] for c in col_keys if c.startswith('N1')])
+        xo = np.sum([row[c] for c in col_keys if c.startswith('O1')])
         
         if row['Pmod'] == 0:
             period = row['P0']
@@ -525,9 +532,8 @@ def make_iso_file(track, isofile):
                 logger.error('bad slope: {}, row: {}'.format(track.firstname, i))
         try:
             isofile.write(fmt % (row['ageyr'], row['L_star'], row['T_star'],
-                                 row['M_star'], row['M_c'], row['CO'], period,
-                                 row['Pmod'], mdot, excess, row['H'],
-                                 row['Y'], CNO, slope))
+                                 row['M_star'], row['M_c'], period, row['Pmod'],
+                                 mdot, row['H'], row['Y'], xc, xn, xo, slope))
         except IndexError:
             logger.error('this row: {}'.format(list(rows).index(r)))
             logger.error('row length: {} slope array length {}'.format(len(rows), len(track.slopes)))
