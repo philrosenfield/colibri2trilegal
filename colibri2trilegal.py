@@ -98,7 +98,7 @@ def colibri2trilegal(input_file):
         for i, agb_track in enumerate(agb_tracks):
             # load track
             track = get_numeric_data(agb_track)
-            
+
             if track == -1:
                 continue
 
@@ -296,7 +296,7 @@ class AGBTracks(object):
         # poly fitted slopes
         slopes = np.append(slopes, [fits[i][0] for i in range(len(fits))])
 
-        # pop in an additional copy of the slope if an interpolation point 
+        # pop in an additional copy of the slope if an interpolation point
         # was added.
         if len(self.addpt) > 0:
             tps_of_addpt = np.array([i for i in range(len(TPs))
@@ -324,7 +324,7 @@ class AGBTracks(object):
         # need to use some unique array, not logt, since logt could repeat,
         # index would find the first one, not necessarily the correct one.
         Sqs = tstep[qs] - 1.  # steps start at 1, not zero
-        # takes the sign of the difference in logt(qs) 
+        # takes the sign of the difference in logt(qs)
         # if the sign of the difference is more than 0, we're going from cold to ho
 
         # finds where the logt goes from getting colder to hotter...
@@ -394,22 +394,21 @@ class AGBTracks(object):
 
     def get_TP_inds(self):
         '''find the thermal pulsations of each file'''
-        if not self.bad_track:
-            ntp = self.data_array['NTP']
-            un = np.unique(ntp)
-            if un.size == 1:
-                logger.warning('only one themal pulse.')
-                self.TPs = un
-            else:
-                # this is the first step in each TP.
-                iTPs = [list(ntp).index(u) for u in un]
-                # The indices of each TP.
-                TPs = [np.arange(iTPs[i], iTPs[i + 1]) for i in range(len(iTPs) - 1)]
-                # don't forget the last one.
-                TPs.append(np.arange(iTPs[i + 1], len(ntp)))
-                self.TPs = TPs
+        self.TPs = []
+        if self.bad_track:
+            return
+        ntp = self.data_array['NTP']
+        un, iTPs = np.unique(ntp, return_index=True)
+        if un.size == 1:
+            logger.warning('only one themal pulse.')
+            self.TPs = un
         else:
-            self.TPs = []
+            # The indices each TP is just filling values between the iTPs
+            # and the final grid point
+            iTPs = np.append(iTPs, len(ntp))
+            self.TPs = [np.arange(iTPs[i], iTPs[i+1])
+                        for i in range(len(iTPs) - 1)]
+
         if len(self.TPs) == 1:
             self.bad_track = True
 
@@ -419,7 +418,9 @@ class AGBTracks(object):
         i.e., closest to 1.
         '''
         phi = self.data_array['PHI_TP']
+        logl = self.data_array['L_star']
         self.Qs = np.unique([TP[np.argmax(phi[TP])] for TP in self.TPs])
+        self.mins = np.unique([TP[np.argmin(logl[TP])] for TP in self.TPs])
 
 
 def get_numeric_data(filename):
@@ -461,7 +462,7 @@ def calc_c_o(row):
     yh = row['H'] / 1.00794
     yc = row['C12'] / 12. + row['C13'] / 13.
     yo = row['O16'] / 16. + row['O17'] / 17. + row['O18'] / 18.
-    
+
     if row['CO'] > 1:
         excess = np.log10((yc / yh) - (yo / yh)) + 12.
     else:
@@ -488,14 +489,19 @@ def make_iso_file(track, isofile, write_header=False):
     X_N : X_N
     X_O : X_O
     slope : dTe/dL
+    X_Cm : X_C at log L min of (the following) TP
+    X_Nm : X_N at log L min of (the following) TP
+    X_Om : X_O at log L min of (the following) TP
     '''
     isofile.write('# age(yr) logL logTe m_act mcore period ip')
-    isofile.write(' Mdot(Msun/yr) X Y X_C X_N X_O dlogTe/dlogL \n')
+    isofile.write(' Mdot(Msun/yr) X Y X_C X_N X_O dlogTe/dlogL X_Cm X_Nm X_Om\n')
 
-    fmt = '%.4e %.4f %.4f %.5f %.5f %.4e %i %.4e %.6e %.6e %.6e %.6e %.6e %.4f \n'
+    fmt = '%.4e %.4f %.4f %.5f %.5f %.4e %i %.4e %.6e %.6e %.6e %.6e %.6e %.4f  %.6e %.6e %.6e\n'
 
     # cull agb track to quiescent
-    rows = [q for q in track.Qs]
+    rows = track.Qs
+    # min of each TP
+    mins = track.mins
 
     keys = track.key_dict.keys()
     vals = track.key_dict.values()
@@ -516,15 +522,21 @@ def make_iso_file(track, isofile, write_header=False):
         xc = np.sum([row[c] for c in col_keys if c.startswith('C1')])
         xn = np.sum([row[c] for c in col_keys if c.startswith('N1')])
         xo = np.sum([row[c] for c in col_keys if c.startswith('O1')])
-        
+
+        xcm = np.sum([track.data_array[mins][c] for c in col_keys if c.startswith('C1')])
+        xnm = np.sum([track.data_array[mins][c] for c in col_keys if c.startswith('N1')])
+        xom = np.sum([track.data_array[mins][c] for c in col_keys if c.startswith('O1')])
+
+        period = row['P1']
         if row['Pmod'] == 0:
             period = row['P0']
-        else:
-            period = row['P1']
-        
+
         if r == rows[-1]:
             # adding nonsense slope for the final row.
             slope = 999
+            xcm = 999
+            xnm = 999
+            xom = 999
         else:
             try:
                 slope = 1. / track.slopes[list(rows).index(r)]
@@ -533,7 +545,8 @@ def make_iso_file(track, isofile, write_header=False):
         try:
             isofile.write(fmt % (row['ageyr'], row['L_star'], row['T_star'],
                                  row['M_star'], row['M_c'], period, row['Pmod'],
-                                 mdot, row['H'], row['Y'], xc, xn, xo, slope))
+                                 mdot, row['H'], row['Y'],
+                                 xc, xn, xo, slope, xcm, xnm, xom))
         except IndexError:
             logger.error('this row: {}'.format(list(rows).index(r)))
             logger.error('row length: {} slope array length {}'.format(len(rows), len(track.slopes)))
@@ -679,7 +692,7 @@ over_write   True
     '''
     if profile is None:
         keys = ['over_write',
-                'agbtrack_dir', 
+                'agbtrack_dir',
                 'agb_mix',
                 'set_name',
                 'trilegal_dir',
@@ -998,7 +1011,7 @@ def two_panel_plot_vert(fign=2):
     return ax1, ax2
 
 
-def diag_plots(track, infile):
+def diag_plots(track, infile, plot_slopes=False):
     agb_mix = infile.agb_mix
     set_name = infile.set_name
     ext = '.png'
@@ -1025,6 +1038,8 @@ def diag_plots(track, infile):
     ax.plot(logt[Qs], logl[Qs], 'o', color='green')
     if len(addpt) > 0:
         ax.plot(logt[addpt], logl[addpt], 'o', color='purple')
+    if plot_slopes:
+        hrd_slopes(track, ax)
     ax.set_xlim(logt_lim)
     ax.set_ylim(logl_lim)
     ax.set_xlabel(r'$\log\ Te$')
@@ -1147,26 +1162,16 @@ def bigplots(agb_tracks, infile):
         plt.savefig(out_fig, dpi=300)
 
 
-def hrd_slopes(track, ax=None):
+def hrd_slopes(track, ax):
     logl = track.data_array['L_star']
     logt = track.data_array['T_star']
-    Qs = list(track.Qs)
     x = np.linspace(min(logt), max(logt))
-    if ax is None:
-        fig, ax = plt.subplots()
-    [ax.plot(x, track.fits[i][0]*x + track.fits[i][1], '--', color='blue',
-             lw=0.5) for i in range(len(track.fits))]
 
-    ax.plot(logt, logl, color='black')
     [ax.plot(np.sort(logt[r]), logl[r][np.argsort(logt[r])], color='red', lw=2)
      for r in track.rising if len(r) > 0]
-    ax.plot(logt[Qs], logl[Qs], color='green', lw=2)
-    [ax.plot(logt[q], logl[q], 'o', color='green') for q in Qs]
-    [ax.plot(logt[add], logl[add], 'o', color='purple')
-     for add in track.addpt if len(track.addpt) > 0]
-    ax.axis([max(logt) + 0.01, min(logt) - 0.01, min(logl) - 0.01,
-             max(logl) + 0.01])
-    ax.text(0.1, 0.85, '$%.3f$' % track.mass, transform=ax.transAxes, fontsize=16)
+    [ax.plot(x, track.fits[i][0] * x + track.fits[i][1], '--', color='blue',
+             lw=0.5) for i in range(len(track.fits))]
+    [ax.plot(logt[q], logl[q], 'o', color='blue') for q in track.mins]
 
 
 def plot_ifmr(imfrfile, ax=None, zs=None, data_mi=None, data_mf=None,
@@ -1251,5 +1256,3 @@ def get_unique_inds(ntp):
         # don't forget the last one.
         TPs.append(np.arange(iTPs[i + 1], len(ntp)))
         return TPs, iTPs
-
-
