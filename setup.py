@@ -5,7 +5,7 @@ from setuptools import setup
 setup(
     name='colibri2trilegal',
     author='Phil Rosenfield',
-    author_email='philip.rosenfield@unipd.it',
+    author_email='philip.rosenfield@cfa.harvard.ed',
     version='2.1',
     url='https://github.com/philrosenfield/colibri2trilegal',
     py_modules=['colibri2trilegal'],
