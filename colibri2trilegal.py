@@ -325,7 +325,7 @@ class AGBTracks(object):
         # index would find the first one, not necessarily the correct one.
         Sqs = tstep[qs] - 1.  # steps start at 1, not zero
         # takes the sign of the difference in logt(qs)
-        # if the sign of the difference is more than 0, we're going from cold to ho
+        # if the sign of the difference is more than 0, we're going from cold to hot
 
         # finds where the logt goes from getting colder to hotter...
         ht, = np.nonzero(np.sign(np.diff(Tqs)) > 0)
@@ -349,7 +349,11 @@ class AGBTracks(object):
             addpt = [np.max(addpt)]
         # update Qs with added pts.
         self.Qs = np.sort(np.concatenate((addpt, qs)))
+        # update mins to take the same point as Qs.
+        self.mins = list(np.sort(np.concatenate((addpt, self.mins))))
         self.addpt = addpt
+
+
 
     def check_ntp(self):
         '''sets self.bad_track = True if only one thermal pulse.'''
@@ -489,19 +493,24 @@ def make_iso_file(track, isofile, write_header=False):
     X_N : X_N
     X_O : X_O
     slope : dTe/dL
+    x_min : Xm at log L min of (the following) TP
+    y_min : Ym at log L min of (the following) TP
     X_Cm : X_C at log L min of (the following) TP
     X_Nm : X_N at log L min of (the following) TP
     X_Om : X_O at log L min of (the following) TP
     '''
     isofile.write('# age(yr) logL logTe m_act mcore period ip')
-    isofile.write(' Mdot(Msun/yr) X Y X_C X_N X_O dlogTe/dlogL X_Cm X_Nm X_Om\n')
+    isofile.write(' Mdot(Msun/yr) X Y X_C X_N X_O dlogTe/dlogL Xm Ym X_Cm X_Nm X_Om\n')
 
-    fmt = '%.4e %.4f %.4f %.5f %.5f %.4e %i %.4e %.6e %.6e %.6e %.6e %.6e %.4f  %.6e %.6e %.6e\n'
+    fmt = '%.4e %.4f %.4f %.5f %.5f %.4e %i %.4e %.6e %.6e %.6e %.6e %.6e %.4f %.6e %.6e %.6e %.6e %.6e\n'
 
     # cull agb track to quiescent
     rows = track.Qs
     # min of each TP
-    mins = track.mins
+
+    mins = track.data_array[track.mins]
+    if len(rows) - len(mins) > 1:
+        import pdb; pdb.set_trace()
 
     keys = track.key_dict.keys()
     vals = track.key_dict.values()
@@ -512,10 +521,21 @@ def make_iso_file(track, isofile, write_header=False):
     #                                   key.startswith('O1'))]
 
     isofile.write(' %.4f %i # %s \n' % (track.mass, len(rows), track.firstname))
-
     for i, r in enumerate(rows):
+        slope = 999
+        xcm = 999
+        xnm = 999
+        xom = 999
+        iminh = 999
+        iminy = 999
         row = track.data_array[r]
+
+        period = row['P1']
+        if row['Pmod'] == 0:
+            period = row['P0']
+
         mdot = 10 ** (row['dMdt'])
+
         # CNO and excess are no longer used
         #CNO = np.sum([row[c] for c in cno])
         #excess = calc_c_o(row)
@@ -523,21 +543,13 @@ def make_iso_file(track, isofile, write_header=False):
         xn = np.sum([row[c] for c in col_keys if c.startswith('N1')])
         xo = np.sum([row[c] for c in col_keys if c.startswith('O1')])
 
-        xcm = np.sum([track.data_array[mins][c] for c in col_keys if c.startswith('C1')])
-        xnm = np.sum([track.data_array[mins][c] for c in col_keys if c.startswith('N1')])
-        xom = np.sum([track.data_array[mins][c] for c in col_keys if c.startswith('O1')])
-
-        period = row['P1']
-        if row['Pmod'] == 0:
-            period = row['P0']
-
-        if r == rows[-1]:
-            # adding nonsense slope for the final row.
-            slope = 999
-            xcm = 999
-            xnm = 999
-            xom = 999
-        else:
+        if r != rows[-1]:
+            imin = mins[i]
+            xcm = np.sum([imin[c] for c in col_keys if c.startswith('C1')])
+            xnm = np.sum([imin[c] for c in col_keys if c.startswith('N1')])
+            xom = np.sum([imin[c] for c in col_keys if c.startswith('O1')])
+            iminh = imin['H']
+            iminy = imin['Y']
             try:
                 slope = 1. / track.slopes[list(rows).index(r)]
             except:
@@ -545,8 +557,8 @@ def make_iso_file(track, isofile, write_header=False):
         try:
             isofile.write(fmt % (row['ageyr'], row['L_star'], row['T_star'],
                                  row['M_star'], row['M_c'], period, row['Pmod'],
-                                 mdot, row['H'], row['Y'],
-                                 xc, xn, xo, slope, xcm, xnm, xom))
+                                 mdot, row['H'], row['Y'], xc, xn, xo, slope,
+                                 iminh, iminy, xcm, xnm, xom))
         except IndexError:
             logger.error('this row: {}'.format(list(rows).index(r)))
             logger.error('row length: {} slope array length {}'.format(len(rows), len(track.slopes)))
